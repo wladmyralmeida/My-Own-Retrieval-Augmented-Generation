@@ -1,3 +1,23 @@
-./env/
+# envs
+.env
+*.env
+.env.*
+**/.env
+
+
+# Virtual env
+.venv/
+.venv/*
+venv/
+
+# Arquivos compilados Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Infos de pacotes
+*.dist-info/
+
 ./storage/data/
 ./storage/index/
