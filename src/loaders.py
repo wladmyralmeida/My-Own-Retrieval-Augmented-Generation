@@ -1,13 +1,13 @@
-"""Simple loaders for .md, .txt, .pdf with resilient parsing and metadata."""
+# src/loaders.py
+"""Resilient loaders for .md, .txt, .pdf (+ optional .docx) with basic metadata."""
 from __future__ import annotations
 
 import os
-import io
 import time
 import logging
 from typing import List, Dict, Optional
 
-# Try to use PyMuPDF (fitz) first; fallback to pypdf if unavailable
+# Prefer PyMuPDF; fallback to pypdf
 try:
     import fitz  # PyMuPDF
     _HAVE_PYMUPDF = True
@@ -19,6 +19,13 @@ try:
     _HAVE_PYPDF = True
 except Exception:
     _HAVE_PYPDF = False
+
+# Optional DOCX
+try:
+    import docx  # python-docx
+    _HAVE_DOCX = True
+except Exception:
+    _HAVE_DOCX = False
 
 log = logging.getLogger("loaders")
 if not log.handlers:
@@ -78,7 +85,6 @@ def _load_pdf_with_pymupdf(path: str, max_pages: Optional[int] = None) -> List[D
         base_meta = _file_meta(path)
         for i in range(limit):
             page = doc.load_page(i)
-            # Use text extractor; "text" mode preserves layout reasonably
             text = page.get_text("text") or ""
             text = text.strip()
             if not text:
@@ -114,7 +120,7 @@ def _load_pdf_with_pypdf(path: str, max_pages: Optional[int] = None) -> List[Dic
 
 
 def load_pdf_files(folder: str, max_pages_per_pdf: Optional[int] = None) -> List[Dict]:
-    """Load PDFs splitting by page, attach page/file metadata. Uses PyMuPDF if available."""
+    """Load PDFs splitting by page, attaching page/file metadata."""
     docs: List[Dict] = []
     use_pymupdf = _HAVE_PYMUPDF
     if not _HAVE_PYMUPDF and not _HAVE_PYPDF:
@@ -134,7 +140,6 @@ def load_pdf_files(folder: str, max_pages_per_pdf: Optional[int] = None) -> List
                 docs.extend(pages)
                 log.info(f"Loaded {len(pages)} pages from {path}")
             except Exception as e:
-                # If PyMuPDF failed, try pypdf as a fallback for this file
                 if use_pymupdf and _HAVE_PYPDF:
                     log.warning(f"PyMuPDF failed for {path} ({e}); retrying with pypdf...")
                     try:
@@ -148,12 +153,44 @@ def load_pdf_files(folder: str, max_pages_per_pdf: Optional[int] = None) -> List
     return docs
 
 
-def load_all_documents(folder: str, *, max_pages_per_pdf: Optional[int] = None,
-                       max_chars_per_text: Optional[int] = None) -> List[Dict]:
-    """Return a list of {page_content, metadata} dicts for txt/md/pdf."""
+def load_docx_files(folder: str, max_chars_per_file: Optional[int] = None) -> List[Dict]:
+    """Optionally load .docx files if python-docx is installed."""
+    docs: List[Dict] = []
+    if not _HAVE_DOCX:
+        return docs
+    for root, _, files in os.walk(folder):
+        for f in files:
+            if not f.lower().endswith(".docx"):
+                continue
+            path = os.path.join(root, f)
+            try:
+                d = docx.Document(path)  # type: ignore[name-defined]
+                text = "\n".join([p.text for p in d.paragraphs]).strip()
+                if max_chars_per_file and len(text) > max_chars_per_file:
+                    text = text[:max_chars_per_file]
+                if not text:
+                    continue
+                meta = _file_meta(path)
+                docs.append({"page_content": text, "metadata": meta})
+            except Exception as e:
+                log.warning(f"Skipping DOCX file due to error: {path} ({e})")
+    if docs:
+        log.info(f"Loaded {len(docs)} DOCX documents from {folder}")
+    return docs
+
+
+def load_all_documents(
+    folder: str,
+    *,
+    max_pages_per_pdf: Optional[int] = None,
+    max_chars_per_text: Optional[int] = None,
+    max_chars_per_docx: Optional[int] = None,
+) -> List[Dict]:
+    """Return a list of {page_content, metadata} dicts for txt/md/pdf/(docx)."""
     start = time.time()
     texts = load_text_files(folder, max_chars_per_text)
     pdfs = load_pdf_files(folder, max_pages_per_pdf)
-    docs = texts + pdfs
+    docxs = load_docx_files(folder, max_chars_per_docx)
+    docs = texts + pdfs + docxs
     log.info(f"Total loaded docs: {len(docs)} in {time.time() - start:.2f}s")
     return docs
